@@ -9,24 +9,104 @@ exports.createBooking = async (req, res) => {
     try {
       const { appointmentDate, appointmentTime, initialSymptoms } = req.body;
       
-      // Validate appointment date is not in the past
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const bookingDate = new Date(appointmentDate);
+      // แก้ไขการตรวจสอบวันที่โดยคำนึงถึง timezone ของไทย (GMT+7)
+      // สร้างวันที่ปัจจุบันในเวลา 00:00:00 ของไทย
+      const now = new Date();
+      const thaiOffset = 7 * 60; // ประเทศไทย GMT+7 (7 ชั่วโมง = 420 นาที)
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      
+      // แปลงวันที่นัดหมายให้เป็น Date object
+      let bookingDate;
+      
+      // ตรวจสอบรูปแบบข้อมูลวันที่ที่ส่งมา
+      if (typeof appointmentDate === 'string') {
+        if (appointmentDate.includes('T')) {
+          // กรณีเป็น ISO string
+          bookingDate = new Date(appointmentDate);
+        } else {
+          // กรณีเป็น YYYY-MM-DD
+          const [year, month, day] = appointmentDate.split('-').map(Number);
+          bookingDate = new Date(year, month - 1, day); // ลบ 1 จากเดือนเพราะ JS เริ่มที่ 0
+        }
+      } else {
+        // กรณีอื่นๆ ให้ลองแปลงเป็น Date โดยตรง
+        bookingDate = new Date(appointmentDate);
+      }
+      
+      // ตั้งเวลาให้เป็น 00:00:00 เพื่อเปรียบเทียบเฉพาะวันที่
       bookingDate.setHours(0, 0, 0, 0);
       
+      console.log('Today (Thailand):', today);
+      console.log('Booking date:', bookingDate);
+      
+      // เปรียบเทียบวันที่
       if (bookingDate < today) {
         return res.status(400).json({ message: 'ไม่สามารถจองวันที่ผ่านมาแล้ว' });
       }
       
-      // Check if it's weekend (Saturday or Sunday)
-      const dayOfWeek = bookingDate.getDay();
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        return res.status(400).json({ message: 'ไม่สามารถจองในวันเสาร์และวันอาทิตย์' });
+      // Check if it's Thursday or Friday (clinic closed)
+      const dayOfWeek = bookingDate.getDay(); // 0 = Sunday, 6 = Saturday
+      if (dayOfWeek === 4 || dayOfWeek === 5) {
+        return res.status(400).json({ message: 'คลินิกไม่เปิดให้บริการในวันพฤหัสบดีและวันศุกร์' });
       }
       
-      // Check available slots
-      const availableSlots = await Booking.getAvailableSlots(appointmentDate);
+      // Check time format and range based on day of week
+      const timeFormat = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+      if (!timeFormat.test(appointmentTime)) {
+        return res.status(400).json({ message: 'รูปแบบเวลาไม่ถูกต้อง (ต้องเป็น HH:MM)' });
+      }
+      
+      const [hours, minutes] = appointmentTime.split(':').map(Number);
+      const totalMinutes = hours * 60 + minutes;
+      
+      // Validate time range based on day of week
+      let isValidTime = false;
+      
+      // Monday-Wednesday (1-3): 16:00 - 20:30
+      if (dayOfWeek >= 1 && dayOfWeek <= 3) {
+        const minTime = 16 * 60; // 16:00
+        const maxTime = 20 * 60 + 30; // 20:30
+        isValidTime = totalMinutes >= minTime && totalMinutes <= maxTime;
+        if (!isValidTime) {
+          return res.status(400).json({ message: 'เวลานัดหมายต้องอยู่ระหว่าง 16:00 น. ถึง 20:30 น. สำหรับวันจันทร์-พุธ' });
+        }
+      }
+      
+      // Saturday-Sunday (0, 6): 09:00 - 20:30
+      if (dayOfWeek === 0 || dayOfWeek === 6) {
+        const minTime = 9 * 60; // 09:00
+        const maxTime = 20 * 60 + 30; // 20:30
+        isValidTime = totalMinutes >= minTime && totalMinutes <= maxTime;
+        if (!isValidTime) {
+          return res.status(400).json({ message: 'เวลานัดหมายต้องอยู่ระหว่าง 09:00 น. ถึง 20:30 น. สำหรับวันเสาร์-อาทิตย์' });
+        }
+      }
+      
+      // Check if time slot is for every 30 minutes (xx:00 or xx:30)
+      if (minutes !== 0 && minutes !== 30) {
+        return res.status(400).json({ message: 'เวลานัดหมายต้องเป็น XX:00 หรือ XX:30 เท่านั้น' });
+      }
+      
+      // If booking is for today, check if time is in the past
+      if (bookingDate.getTime() === today.getTime()) {
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
+        const currentTotalMinutes = currentHour * 60 + currentMinute + 30; // Add 30 minutes buffer
+        
+        if (totalMinutes <= currentTotalMinutes) {
+          return res.status(400).json({ message: 'ไม่สามารถจองเวลาที่ผ่านไปแล้วหรือใกล้จะถึง (ต้องจองล่วงหน้าอย่างน้อย 30 นาที)' });
+        }
+      }
+      
+      // Check available slots - Convert appointmentDate to ISO string format for consistent handling
+      let formattedDate;
+      if (typeof appointmentDate === 'string' && appointmentDate.includes('T')) {
+        formattedDate = appointmentDate;
+      } else {
+        formattedDate = bookingDate.toISOString();
+      }
+      
+      const availableSlots = await Booking.getAvailableSlots(formattedDate);
       
       if (!availableSlots.available) {
         return res.status(400).json({ message: availableSlots.message || 'ไม่มีคิวว่างในวันที่เลือก' });
@@ -36,10 +116,10 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'เวลาที่เลือกไม่ว่างหรือไม่ถูกต้อง' });
       }
       
-      // Create new booking
+      // Create new booking - ensure appointmentDate is a proper Date object
       const booking = await Booking.create({
         user: req.user._id,
-        appointmentDate,
+        appointmentDate: bookingDate,
         appointmentTime,
         initialSymptoms
       });
@@ -69,7 +149,7 @@ exports.createBooking = async (req, res) => {
         error: error.message
       });
     }
-  };
+};
 
 // @desc    Get user bookings
 // @route   GET /api/bookings
@@ -163,11 +243,65 @@ exports.getAvailableSlots = async (req, res) => {
   try {
     const date = req.params.date;
     
-    const availableSlots = await Booking.getAvailableSlots(date);
+    // Add logging to troubleshoot date format issues
+    console.log('Received date parameter:', date, 'Type:', typeof date);
+    
+    if (!date) {
+      return res.status(400).json({
+        message: 'กรุณาระบุวันที่'
+      });
+    }
+    
+    // Format the date consistently before passing to the model
+    let formattedDate;
+    
+    try {
+      // First try parsing as a valid date format
+      if (date.includes('T')) {
+        // Already in ISO format
+        formattedDate = date;
+      } else if (date.includes('-')) {
+        // Looks like YYYY-MM-DD format, validate it
+        const [year, month, day] = date.split('-').map(Number);
+        
+        // Check if all parts are valid numbers
+        if (isNaN(year) || isNaN(month) || isNaN(day)) {
+          throw new Error('Invalid date format');
+        }
+        
+        // Create a new date and convert to ISO string
+        const dateObj = new Date(year, month - 1, day);
+        
+        // Check if resulting date is valid
+        if (isNaN(dateObj.getTime())) {
+          throw new Error('Invalid date'); 
+        }
+        
+        formattedDate = dateObj.toISOString();
+      } else {
+        // Try to parse as timestamp or other format
+        const dateObj = new Date(date);
+        
+        if (isNaN(dateObj.getTime())) {
+          throw new Error('Invalid date format');
+        }
+        
+        formattedDate = dateObj.toISOString();
+      }
+    } catch (error) {
+      return res.status(400).json({
+        message: 'รูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันที่ในรูปแบบ YYYY-MM-DD',
+        error: error.message
+      });
+    }
+    
+    console.log('Formatted date for getAvailableSlots:', formattedDate);
+    
+    const availableSlots = await Booking.getAvailableSlots(formattedDate);
     
     res.json(availableSlots);
   } catch (error) {
-    console.error(error);
+    console.error('Error in getAvailableSlots controller:', error);
     res.status(500).json({
       message: 'เกิดข้อผิดพลาดในการดึงข้อมูลคิวว่าง',
       error: error.message

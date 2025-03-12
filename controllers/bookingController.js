@@ -116,12 +116,23 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'เวลาที่เลือกไม่ว่างหรือไม่ถูกต้อง' });
       }
       
+      // Find the number of bookings for the same date to assign queue number
+      const bookingsCount = await Booking.countDocuments({
+        appointmentDate: {
+          $gte: new Date(bookingDate.setHours(0,0,0,0)),
+          $lt: new Date(bookingDate.setHours(23,59,59,999))
+        },
+        status: { $ne: 'cancelled' }
+      });
+      
       // Create new booking - ensure appointmentDate is a proper Date object
       const booking = await Booking.create({
         user: req.user._id,
         appointmentDate: bookingDate,
         appointmentTime,
-        initialSymptoms
+        initialSymptoms,
+        status: 'pending', // ตั้งค่าเริ่มต้นเป็น 'pending'
+        queueNumber: bookingsCount + 1  // Assign queue number
       });
       
       // Populate user data
@@ -156,10 +167,49 @@ exports.createBooking = async (req, res) => {
 // @access  Private
 exports.getUserBookings = async (req, res) => {
   try {
-    const bookings = await Booking.find({ user: req.user._id })
+    // ดึงข้อมูลการจองของผู้ใช้พร้อมข้อมูลผู้ใช้
+    // ปรับปรุงให้ดึงข้อมูลทั้งหมดรวมถึงที่ยกเลิกเพื่อใช้ในหน้าประวัติการจอง
+    const bookings = await Booking.find({ 
+      user: req.user._id
+    })
+      .populate('user', 'firstName lastName phone email')
       .sort({ appointmentDate: 1, appointmentTime: 1 });
     
-    res.json(bookings);
+    // แปลงข้อมูลให้อยู่ในรูปแบบที่ frontend ต้องการ
+    const formattedBookings = bookings.map(booking => {
+      // คำนวณเวลาที่คาดว่าจะเข้าตรวจ (เพิ่ม 10 นาทีจากเวลานัด)
+      const [hours, minutes] = booking.appointmentTime.split(':').map(Number);
+      let estimatedHours = hours;
+      let estimatedMinutes = minutes + 10;
+      
+      if (estimatedMinutes >= 60) {
+        estimatedHours += 1;
+        estimatedMinutes -= 60;
+      }
+      
+      const estimatedTime = `${String(estimatedHours).padStart(2, '0')}:${String(estimatedMinutes).padStart(2, '0')}`;
+      
+      // หาลำดับการจองในวันเดียวกัน (ถ้ายังไม่มีในฐานข้อมูล)
+      const queueNumber = booking.queueNumber || 1;
+      
+      return {
+        _id: booking._id,
+        user: booking.user,
+        appointmentDate: booking.appointmentDate,
+        appointmentTime: booking.appointmentTime,
+        initialSymptoms: booking.initialSymptoms,
+        symptoms: booking.initialSymptoms, // เพิ่มความเข้ากันได้กับหน้าบ้าน
+        status: booking.status,
+        queueNumber,  // เพิ่มข้อมูลลำดับคิว
+        estimatedTime, // เพิ่มข้อมูลเวลาที่คาดว่าจะเข้าตรวจ
+        adminNotes: booking.adminNotes, // เพิ่มข้อมูลบันทึกจากแพทย์
+        cancelReason: booking.cancelReason, // เพิ่มข้อมูลเหตุผลในการยกเลิก
+        createdAt: booking.createdAt,
+        updatedAt: booking.updatedAt
+      };
+    });
+    
+    res.json(formattedBookings);
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -174,18 +224,42 @@ exports.getUserBookings = async (req, res) => {
 // @access  Private
 exports.getBookingById = async (req, res) => {
   try {
-    const booking = await Booking.findById(req.params.id);
+    const booking = await Booking.findById(req.params.id)
+      .populate('user', 'firstName lastName phone email');
     
     if (!booking) {
       return res.status(404).json({ message: 'ไม่พบข้อมูลการจอง' });
     }
     
     // Check if the booking belongs to the logged-in user or if user is admin
-    if (booking.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
+    if (booking.user._id.toString() !== req.user._id.toString() && !req.user.isAdmin) {
       return res.status(401).json({ message: 'ไม่ได้รับอนุญาตให้ดูข้อมูลนี้' });
     }
     
-    res.json(booking);
+    // คำนวณเวลาที่คาดว่าจะเข้าตรวจ (เพิ่ม 10 นาทีจากเวลานัด)
+    const [hours, minutes] = booking.appointmentTime.split(':').map(Number);
+    let estimatedHours = hours;
+    let estimatedMinutes = minutes + 10;
+    
+    if (estimatedMinutes >= 60) {
+      estimatedHours += 1;
+      estimatedMinutes -= 60;
+    }
+    
+    const estimatedTime = `${String(estimatedHours).padStart(2, '0')}:${String(estimatedMinutes).padStart(2, '0')}`;
+    
+    // หาลำดับการจองในวันเดียวกัน (ถ้ายังไม่มีในฐานข้อมูล)
+    const queueNumber = booking.queueNumber || 1;
+    
+    // เพิ่มข้อมูลที่จำเป็นสำหรับ frontend
+    const formattedBooking = {
+      ...booking.toObject(),
+      queueNumber,
+      estimatedTime,
+      symptoms: booking.initialSymptoms // เพิ่มความเข้ากันได้กับหน้าบ้าน
+    };
+    
+    res.json(formattedBooking);
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -212,7 +286,7 @@ exports.cancelBooking = async (req, res) => {
     }
     
     // Check if booking can be cancelled (not already cancelled or completed)
-    if (booking.status !== 'pending') {
+    if (booking.status !== 'pending' && booking.status !== 'confirmed') {
       return res.status(400).json({ 
         message: `ไม่สามารถยกเลิกการจองได้ สถานะปัจจุบัน: ${booking.status}` 
       });
@@ -223,8 +297,13 @@ exports.cancelBooking = async (req, res) => {
     
     const updatedBooking = await booking.save();
     
-    // Here you would send LINE notification for cancellation
-    // lineNotify.sendCancellationNotification(updatedBooking);
+    // แจ้งเตือนการยกเลิกผ่าน Line
+    try {
+      await lineNotify.sendCancellationNotification(updatedBooking);
+    } catch (notifyError) {
+      console.error('Failed to send cancellation LINE notification:', notifyError);
+      // ไม่ return error response เพื่อให้ API ยังทำงานต่อไปได้
+    }
     
     res.json(updatedBooking);
   } catch (error) {

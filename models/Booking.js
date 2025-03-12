@@ -65,12 +65,33 @@ const bookingSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'success', 'cancelled'],
+      enum: ['pending', 'confirmed', 'completed', 'cancelled', 'in-progress'],
       default: 'pending'
     },
     callTime: {
       type: Date,
       default: null
+    },
+    // เพิ่มฟิลด์ queueNumber สำหรับเก็บลำดับคิว
+    queueNumber: {
+      type: Number,
+      default: null
+    },
+    cancelReason: {
+      type: String,
+      default: null
+    },
+    // เพิ่มฟิลด์สำหรับบันทึกจากแพทย์
+    adminNotes: {
+      type: String,
+      default: null
+    },
+    // สำหรับความเข้ากันได้กับไฟล์เดิม (ที่ใช้ initialSymptoms)
+    symptoms: {
+      type: String,
+      default: function() {
+        return this.initialSymptoms;
+      }
     }
   },
   {

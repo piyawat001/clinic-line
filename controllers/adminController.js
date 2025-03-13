@@ -149,7 +149,9 @@ exports.getBookingStatistics = async (req, res) => {
     
     // Bookings by status
     const pendingBookings = await Booking.countDocuments({ status: 'pending' });
-    const successBookings = await Booking.countDocuments({ status: 'success' });
+    const successBookings = await Booking.countDocuments({ 
+      $or: [{ status: 'success' }, { status: 'completed' }] 
+    });
     const cancelledBookings = await Booking.countDocuments({ status: 'cancelled' });
     
     // Today's bookings
@@ -177,6 +179,55 @@ exports.getBookingStatistics = async (req, res) => {
     console.error(error);
     res.status(500).json({
       message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสถิติ',
+      error: error.message
+    });
+  }
+};
+
+
+// @desc    Get bookings count by day for the last 7 days
+// @route   GET /api/admin/bookings/by-day
+// @access  Private/Admin
+exports.getBookingsByDay = async (req, res) => {
+  try {
+    // Get current date and set to beginning of the day
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get date 7 days ago
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    
+    // Array to hold our results
+    const results = [];
+    
+    // Loop through each day and count bookings
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(sevenDaysAgo);
+      date.setDate(date.getDate() + i);
+      
+      const nextDay = new Date(date);
+      nextDay.setDate(date.getDate() + 1);
+      
+      // Count bookings for this day
+      const count = await Booking.countDocuments({
+        appointmentDate: {
+          $gte: date,
+          $lt: nextDay
+        }
+      });
+      
+      results.push({
+        date: date.toISOString().split('T')[0], // Format as YYYY-MM-DD
+        count: count
+      });
+    }
+    
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching bookings by day:', error);
+    res.status(500).json({
+      message: 'เกิดข้อผิดพลาดในการดึงข้อมูลการนัดหมายรายวัน',
       error: error.message
     });
   }

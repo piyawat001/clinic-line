@@ -12,5 +12,5 @@ router.put('/bookings/:id', adminController.updateBookingStatus);
 router.put('/bookings/:id/call', adminController.callUserForAppointment);
 router.get('/users', adminController.getAllUsers);
 router.get('/statistics', adminController.getBookingStatistics);
-
+router.get('/bookings/by-day', adminController.getBookingsByDay);
 module.exports = router;

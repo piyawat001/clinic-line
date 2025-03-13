@@ -5,161 +5,172 @@ const lineNotify = require('../utils/lineNotify');
 // @desc    Create a new booking
 // @route   POST /api/bookings
 // @access  Private
+
 exports.createBooking = async (req, res) => {
-    try {
-      const { appointmentDate, appointmentTime, initialSymptoms } = req.body;
-      
-      // แก้ไขการตรวจสอบวันที่โดยคำนึงถึง timezone ของไทย (GMT+7)
-      // สร้างวันที่ปัจจุบันในเวลา 00:00:00 ของไทย
-      const now = new Date();
-      const thaiOffset = 7 * 60; // ประเทศไทย GMT+7 (7 ชั่วโมง = 420 นาที)
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      
-      // แปลงวันที่นัดหมายให้เป็น Date object
-      let bookingDate;
-      
-      // ตรวจสอบรูปแบบข้อมูลวันที่ที่ส่งมา
-      if (typeof appointmentDate === 'string') {
-        if (appointmentDate.includes('T')) {
-          // กรณีเป็น ISO string
-          bookingDate = new Date(appointmentDate);
-        } else {
-          // กรณีเป็น YYYY-MM-DD
-          const [year, month, day] = appointmentDate.split('-').map(Number);
-          bookingDate = new Date(year, month - 1, day); // ลบ 1 จากเดือนเพราะ JS เริ่มที่ 0
-        }
-      } else {
-        // กรณีอื่นๆ ให้ลองแปลงเป็น Date โดยตรง
+  try {
+    const { appointmentDate, appointmentTime, initialSymptoms } = req.body;
+    
+    // แก้ไขการตรวจสอบวันที่โดยคำนึงถึง timezone ของไทย (GMT+7)
+    // สร้างวันที่ปัจจุบันตามเวลาท้องถิ่น
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // แปลงวันที่นัดหมายให้เป็น Date object
+    let bookingDate;
+    
+    // ตรวจสอบรูปแบบข้อมูลวันที่ที่ส่งมา
+    if (typeof appointmentDate === 'string') {
+      if (appointmentDate.includes('T')) {
+        // กรณีเป็น ISO string
         bookingDate = new Date(appointmentDate);
-      }
-      
-      // ตั้งเวลาให้เป็น 00:00:00 เพื่อเปรียบเทียบเฉพาะวันที่
-      bookingDate.setHours(0, 0, 0, 0);
-      
-      console.log('Today (Thailand):', today);
-      console.log('Booking date:', bookingDate);
-      
-      // เปรียบเทียบวันที่
-      if (bookingDate < today) {
-        return res.status(400).json({ message: 'ไม่สามารถจองวันที่ผ่านมาแล้ว' });
-      }
-      
-      // Check if it's Thursday or Friday (clinic closed)
-      const dayOfWeek = bookingDate.getDay(); // 0 = Sunday, 6 = Saturday
-      if (dayOfWeek === 4 || dayOfWeek === 5) {
-        return res.status(400).json({ message: 'คลินิกไม่เปิดให้บริการในวันพฤหัสบดีและวันศุกร์' });
-      }
-      
-      // Check time format and range based on day of week
-      const timeFormat = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
-      if (!timeFormat.test(appointmentTime)) {
-        return res.status(400).json({ message: 'รูปแบบเวลาไม่ถูกต้อง (ต้องเป็น HH:MM)' });
-      }
-      
-      const [hours, minutes] = appointmentTime.split(':').map(Number);
-      const totalMinutes = hours * 60 + minutes;
-      
-      // Validate time range based on day of week
-      let isValidTime = false;
-      
-      // Monday-Wednesday (1-3): 16:00 - 20:30
-      if (dayOfWeek >= 1 && dayOfWeek <= 3) {
-        const minTime = 16 * 60; // 16:00
-        const maxTime = 20 * 60 + 30; // 20:30
-        isValidTime = totalMinutes >= minTime && totalMinutes <= maxTime;
-        if (!isValidTime) {
-          return res.status(400).json({ message: 'เวลานัดหมายต้องอยู่ระหว่าง 16:00 น. ถึง 20:30 น. สำหรับวันจันทร์-พุธ' });
-        }
-      }
-      
-      // Saturday-Sunday (0, 6): 09:00 - 20:30
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        const minTime = 9 * 60; // 09:00
-        const maxTime = 20 * 60 + 30; // 20:30
-        isValidTime = totalMinutes >= minTime && totalMinutes <= maxTime;
-        if (!isValidTime) {
-          return res.status(400).json({ message: 'เวลานัดหมายต้องอยู่ระหว่าง 09:00 น. ถึง 20:30 น. สำหรับวันเสาร์-อาทิตย์' });
-        }
-      }
-      
-      // Check if time slot is for every 30 minutes (xx:00 or xx:30)
-      if (minutes !== 0 && minutes !== 30) {
-        return res.status(400).json({ message: 'เวลานัดหมายต้องเป็น XX:00 หรือ XX:30 เท่านั้น' });
-      }
-      
-      // If booking is for today, check if time is in the past
-      if (bookingDate.getTime() === today.getTime()) {
-        const currentHour = now.getHours();
-        const currentMinute = now.getMinutes();
-        const currentTotalMinutes = currentHour * 60 + currentMinute + 30; // Add 30 minutes buffer
-        
-        if (totalMinutes <= currentTotalMinutes) {
-          return res.status(400).json({ message: 'ไม่สามารถจองเวลาที่ผ่านไปแล้วหรือใกล้จะถึง (ต้องจองล่วงหน้าอย่างน้อย 30 นาที)' });
-        }
-      }
-      
-      // Check available slots - Convert appointmentDate to ISO string format for consistent handling
-      let formattedDate;
-      if (typeof appointmentDate === 'string' && appointmentDate.includes('T')) {
-        formattedDate = appointmentDate;
       } else {
-        formattedDate = bookingDate.toISOString();
+        // กรณีเป็น YYYY-MM-DD
+        const [year, month, day] = appointmentDate.split('-').map(Number);
+        // ใช้โครงสร้างเดียวกับการสร้าง today เพื่อป้องกันปัญหา timezone
+        bookingDate = new Date(year, month - 1, day);
       }
-      
-      const availableSlots = await Booking.getAvailableSlots(formattedDate);
-      
-      if (!availableSlots.available) {
-        return res.status(400).json({ message: availableSlots.message || 'ไม่มีคิวว่างในวันที่เลือก' });
-      }
-      
-      if (!availableSlots.availableSlots.includes(appointmentTime)) {
-        return res.status(400).json({ message: 'เวลาที่เลือกไม่ว่างหรือไม่ถูกต้อง' });
-      }
-      
-      // Find the number of bookings for the same date to assign queue number
-      const bookingsCount = await Booking.countDocuments({
-        appointmentDate: {
-          $gte: new Date(bookingDate.setHours(0,0,0,0)),
-          $lt: new Date(bookingDate.setHours(23,59,59,999))
-        },
-        status: { $ne: 'cancelled' }
-      });
-      
-      // Create new booking - ensure appointmentDate is a proper Date object
-      const booking = await Booking.create({
-        user: req.user._id,
-        appointmentDate: bookingDate,
-        appointmentTime,
-        initialSymptoms,
-        status: 'pending', // ตั้งค่าเริ่มต้นเป็น 'pending'
-        queueNumber: bookingsCount + 1  // Assign queue number
-      });
-      
-      // Populate user data
-      const populatedBooking = await booking.populate('user', 'firstName lastName phone email');
-      
-      // ส่ง LINE notification แบบมี try-catch เพื่อให้แอปยังทำงานได้แม้การส่งแจ้งเตือนล้มเหลว
-      try {
-        await lineNotify.sendBookingConfirmation(populatedBooking);
-      } catch (notifyError) {
-        console.error('Failed to send LINE notification:', notifyError);
-        // ไม่ return error response เพื่อให้ API ยังทำงานต่อไปได้
-      }
-      
-      res.status(201).json(populatedBooking);
-    } catch (error) {
-      console.error(error);
-      
-      // Handle duplicate booking error
-      if (error.code === 11000) {
-        return res.status(400).json({ message: 'เวลานี้ถูกจองแล้ว กรุณาเลือกเวลาอื่น' });
-      }
-      
-      res.status(500).json({
-        message: 'เกิดข้อผิดพลาดในการจองคิว',
-        error: error.message
-      });
+    } else {
+      // กรณีอื่นๆ ให้ลองแปลงเป็น Date โดยตรง
+      bookingDate = new Date(appointmentDate);
     }
+    
+    // ตั้งเวลาให้เป็น 00:00:00 เพื่อเปรียบเทียบเฉพาะวันที่
+    bookingDate.setHours(0, 0, 0, 0);
+    
+    console.log('Today:', today);
+    console.log('Booking date:', bookingDate);
+    console.log('Is past date:', bookingDate < today);
+    
+    // เปรียบเทียบวันที่
+    if (bookingDate < today) {
+      return res.status(400).json({ message: 'ไม่สามารถจองวันที่ผ่านมาแล้ว' });
+    }
+    
+    // Check if it's Saturday or Sunday (clinic closed)
+    const dayOfWeek = bookingDate.getDay(); // 0 = Sunday, 6 = Saturday
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return res.status(400).json({ message: 'คลินิกไม่เปิดให้บริการในวันเสาร์และวันอาทิตย์' });
+    }
+    
+    // Check time format and range based on day of week
+    const timeFormat = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (!timeFormat.test(appointmentTime)) {
+      return res.status(400).json({ message: 'รูปแบบเวลาไม่ถูกต้อง (ต้องเป็น HH:MM)' });
+    }
+    
+    const [hours, minutes] = appointmentTime.split(':').map(Number);
+    const totalMinutes = hours * 60 + minutes;
+    
+    // Validate time range for all days (Monday-Friday)
+    // Monday-Friday (1-5): 16:00 - 20:30
+    const minTime = 16 * 60; // 16:00
+    const maxTime = 20 * 60 + 30; // 20:30
+    const isValidTime = totalMinutes >= minTime && totalMinutes <= maxTime;
+    
+    if (!isValidTime) {
+      return res.status(400).json({ message: 'เวลานัดหมายต้องอยู่ระหว่าง 16:00 น. ถึง 20:30 น.' });
+    }
+    
+    // Check if time slot is for every 30 minutes (xx:00 or xx:30)
+    if (minutes !== 0 && minutes !== 30) {
+      return res.status(400).json({ message: 'เวลานัดหมายต้องเป็น XX:00 หรือ XX:30 เท่านั้น' });
+    }
+    
+    // If booking is for today, check if time is in the past
+    if (bookingDate.getTime() === today.getTime()) {
+      const currentHour = now.getHours();
+      const currentMinute = now.getMinutes();
+      const currentTotalMinutes = currentHour * 60 + currentMinute + 30; // Add 30 minutes buffer
+      
+      console.log('Current time (with buffer):', currentTotalMinutes);
+      console.log('Booking time:', totalMinutes);
+      console.log('Is past time:', totalMinutes <= currentTotalMinutes);
+      
+      if (totalMinutes <= currentTotalMinutes) {
+        return res.status(400).json({ message: 'ไม่สามารถจองเวลาที่ผ่านไปแล้วหรือใกล้จะถึง (ต้องจองล่วงหน้าอย่างน้อย 30 นาที)' });
+      }
+    }
+    
+    // แปลงวันที่ให้อยู่ในรูปแบบที่ถูกต้อง
+    const formattedDate = bookingDate.toISOString();
+    console.log('Formatted date for getAvailableSlots:', formattedDate);
+    
+    // Check available slots
+    const availableSlots = await Booking.getAvailableSlots(formattedDate);
+    console.log('Available slots response:', availableSlots);
+    
+    if (!availableSlots.available) {
+      return res.status(400).json({ message: availableSlots.message || 'ไม่มีคิวว่างในวันที่เลือก' });
+    }
+    
+    if (!availableSlots.availableSlots.includes(appointmentTime)) {
+      return res.status(400).json({ message: 'เวลาที่เลือกไม่ว่างหรือไม่ถูกต้อง' });
+    }
+    
+    // Check if user already has a booking for the same date and time
+    const existingUserBooking = await Booking.findOne({
+      user: req.user._id,
+      appointmentDate: {
+        $gte: new Date(bookingDate.setHours(0,0,0,0)),
+        $lt: new Date(bookingDate.setHours(23,59,59,999))
+      },
+      appointmentTime: appointmentTime,
+      status: { $ne: 'cancelled' }
+    });
+    
+    if (existingUserBooking) {
+      return res.status(400).json({ message: 'คุณมีการจองในเวลานี้อยู่แล้ว' });
+    }
+    
+    // Check if there are already 2 bookings for this time slot
+    const existingBookingsCount = await Booking.countDocuments({
+      appointmentDate: {
+        $gte: new Date(bookingDate.setHours(0,0,0,0)),
+        $lt: new Date(bookingDate.setHours(23,59,59,999))
+      },
+      appointmentTime: appointmentTime,
+      status: { $ne: 'cancelled' }
+    });
+    
+    console.log('Existing bookings count for this slot:', existingBookingsCount);
+    
+    if (existingBookingsCount >= 2) {
+      return res.status(400).json({ message: 'เวลานี้มีการจองเต็มแล้ว (สูงสุด 2 การจองต่อช่วงเวลา)' });
+    }
+    
+    // Find the total number of bookings for the same date to assign queue number
+    const bookingsCount = await Booking.countDocuments({
+      appointmentDate: {
+        $gte: new Date(bookingDate.setHours(0,0,0,0)),
+        $lt: new Date(bookingDate.setHours(23,59,59,999))
+      },
+      status: { $ne: 'cancelled' }
+    });
+    
+    // Create new booking - ensure appointmentDate is a proper Date object
+    const booking = await Booking.create({
+      user: req.user._id,
+      appointmentDate: bookingDate,
+      appointmentTime,
+      initialSymptoms,
+      status: 'pending', // ตั้งค่าเริ่มต้นเป็น 'pending'
+      queueNumber: bookingsCount + 1  // Assign queue number
+    });
+    
+    // Populate user data
+    const populatedBooking = await booking.populate('user', 'firstName lastName phone email');
+    
+    // ปิดการใช้งาน LINE Notify
+    
+    res.status(201).json(populatedBooking);
+  } catch (error) {
+    console.error(error);
+    
+    res.status(500).json({
+      message: 'เกิดข้อผิดพลาดในการจองคิว',
+      error: error.message
+    });
+  }
 };
 
 // @desc    Get user bookings
@@ -297,6 +308,8 @@ exports.cancelBooking = async (req, res) => {
     
     const updatedBooking = await booking.save();
     
+    // ถ้าต้องการปิดการใช้งาน LINE Notify ในทุกกรณี ให้ลบหรือคอมเมนต์ส่วนนี้ทิ้ง
+    /* 
     // แจ้งเตือนการยกเลิกผ่าน Line
     try {
       await lineNotify.sendCancellationNotification(updatedBooking);
@@ -304,6 +317,7 @@ exports.cancelBooking = async (req, res) => {
       console.error('Failed to send cancellation LINE notification:', notifyError);
       // ไม่ return error response เพื่อให้ API ยังทำงานต่อไปได้
     }
+    */
     
     res.json(updatedBooking);
   } catch (error) {

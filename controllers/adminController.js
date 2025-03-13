@@ -79,9 +79,8 @@ exports.callUserForAppointment = async (req, res) => {
   try {
     let { callTime } = req.body;
     
-    // เพิ่มการจัดการกรณีไม่มี callTime หรือ callTime เป็น null
     if (!callTime) {
-      callTime = new Date(); // ใช้เวลาปัจจุบันถ้าไม่ได้ระบุ
+      callTime = new Date();
     }
     
     const booking = await Booking.findById(req.params.id).populate('user', 'firstName lastName phone lineUserId');
@@ -91,12 +90,25 @@ exports.callUserForAppointment = async (req, res) => {
     }
     
     booking.callTime = new Date(callTime);
-    booking.status = 'success';
+    booking.status = 'completed'; // หรือสถานะอื่นที่มีอยู่ในเงื่อนไข enum
     
     const updatedBooking = await booking.save();
     
-    // Here you would send LINE notification for calling user
-    // lineNotify.sendCallNotification(updatedBooking);
+    // ส่งแจ้งเตือนผ่าน Socket.IO
+    const io = req.app.get('io');
+    const userSocketMap = req.app.get('userSocketMap');
+    const userSocketId = userSocketMap[booking.user._id.toString()];
+    
+    if (userSocketId) {
+      io.to(userSocketId).emit('queue_called', {
+        bookingId: booking._id,
+        message: 'ถึงคิวของคุณแล้ว กรุณาเข้าพบแพทย์',
+        timestamp: new Date()
+      });
+      console.log('Notification sent to user:', booking.user._id);
+    } else {
+      console.log('User not connected:', booking.user._id);
+    }
     
     res.json({
       message: 'ส่งการเรียกผู้ใช้สำเร็จ',

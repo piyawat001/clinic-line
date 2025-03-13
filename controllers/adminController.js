@@ -77,10 +77,11 @@ exports.updateBookingStatus = async (req, res) => {
 // @access  Private/Admin
 exports.callUserForAppointment = async (req, res) => {
   try {
-    const { callTime } = req.body;
+    let { callTime } = req.body;
     
+    // เพิ่มการจัดการกรณีไม่มี callTime หรือ callTime เป็น null
     if (!callTime) {
-      return res.status(400).json({ message: 'กรุณาระบุเวลาที่ต้องการเรียกผู้ใช้' });
+      callTime = new Date(); // ใช้เวลาปัจจุบันถ้าไม่ได้ระบุ
     }
     
     const booking = await Booking.findById(req.params.id).populate('user', 'firstName lastName phone lineUserId');
@@ -102,7 +103,7 @@ exports.callUserForAppointment = async (req, res) => {
       booking: updatedBooking
     });
   } catch (error) {
-    console.error(error);
+    console.error('Call User Error:', error);
     res.status(500).json({
       message: 'เกิดข้อผิดพลาดในการเรียกผู้ใช้',
       error: error.message
